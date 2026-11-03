@@ -152,3 +152,8 @@ That is well over 20 tests in total.
 4. The four branches in the order above. Each one: tests commit, see red, agent writes code, I review the diff and run pytest and ruff myself, feature commit, Agent Log entry, pull request, merge.
 5. Seed file, hidden instruction check, overdue demo, and /code-review on the last pull request.
 6. Stretch goals if time allows: CI workflow, report command, test folder guard hook, Dockerfile.
+
+## Changes after the plan was written
+
+- Branch 2: I wrote "all 8 pairs" for the allowed changes. The table has 7 (open 2, assigned 2, escalated 2, resolved 1, closed 0). The tests cover all 7, plus 16 disallowed pairs.
+- Branch 2: added a rule that `by` (who made the change) cannot be blank, for filing and for every status change. Without it a history row could be saved with no "who".

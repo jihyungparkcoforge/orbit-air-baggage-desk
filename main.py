@@ -70,11 +70,12 @@ def _cmd_escalate(conn, args, now):
 
 
 def _cmd_history(conn, args, now):
-    entries = claims.get_history(conn, args.id)
-    if not entries:
-        print(f"No history for claim {args.id}.")
-        return
-    for entry in entries:
+    claim = claims.get_claim(conn, args.id)  # an unknown id is an error, not empty output
+    print(f"Claim {claim.id}: {claim.passenger}, {claim.flight}, {claim.claim_type}, "
+          f"{claim.tier}, {claim.status}")
+    if claim.note:
+        print(f"Note: {claim.note}")
+    for entry in claims.get_history(conn, claim.id):
         print(f"{entry.changed_at.isoformat()}  {entry.old_status or '-'} -> "
               f"{entry.new_status}  by {entry.changed_by}")
 

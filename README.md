@@ -53,3 +53,40 @@ Bash(cat .env)  -> Permission to use Bash with command cat .env has been denied.
 Both calls were listed under `permission_denials` in the session result, and nothing from the file showed up in the output. The rules doing this are `Read(./.env)` and `Read(./.env.*)`, plus `Bash(cat .env*)` and similar entries for `head`, `tail`, `less`, and `more`. The Bash entries only cover those commands. Claude pointed out that something like `python -c "open('.env')"` would not match them, so the other half of the protection is that the key is fake and `.env` is in `.gitignore`.
 
 I also tested the Stop hook command by hand before relying on it: with no tests it exits 0 (pytest exit code 5 is treated as nothing to check), with a failing test it exits 2 and prints the failure to stderr, and with a passing test it exits 0.
+
+## Agent Log
+
+Every branch followed the same loop. I wrote the tests, committed them, and watched them fail. Then I gave a new Claude Code session (`claude -p` in the project folder, so it loaded CLAUDE.md, the deny rule, and the Stop hook) a prompt built from the branch's Linear issue. After that I reviewed the diff, reran pytest and ruff myself, and committed the feature code. The agent was told not to commit, and it never did.
+
+### feature/schema-and-filing (JIH-22)
+
+**Prompt I gave**
+
+```
+Linear issue JIH-22, branch feature/schema-and-filing (already checked out).
+
+Goal: create db.py and claims.py so that every test in tests/test_claims.py passes. The tests and the fixtures in tests/conftest.py are the spec, so read them first, then the Tables and Deadline sections of PLAN.md.
+
+What to build:
+- db.py: connect(path) returning a sqlite3 connection with row_factory = sqlite3.Row and foreign keys on, and init_db(conn) that creates the claims and history tables from PLAN.md with CHECK constraints. Safe to call twice.
+- claims.py: CLAIM_TYPES, TIERS, STATUSES, DEADLINE_HOURS, ClaimError(ValueError), frozen dataclasses Claim and HistoryEntry with datetime fields, deadline_for, file_claim, get_claim, list_claims, get_history.
+- file_claim inserts the claim row first and then its history row, both inside one `with conn:` block.
+
+Constraints:
+- Do not edit anything in tests/. If a test looks wrong, stop and tell me why instead.
+- claims.py must not read the clock. `now` is always a parameter.
+- Standard library only. Do not create main.py yet. Do not commit.
+
+Check before you finish: run `.venv/bin/python -m pytest -v` and `.venv/bin/ruff check .`, and show me the last lines of both. Then list any design choices you made that I should look at in review.
+```
+
+**What the agent did.** It read the conftest, the test file, PLAN.md, and pyproject.toml, then wrote `db.py` and `claims.py` in one pass. It ran the tests (21 passed) and ruff (clean), grepped its own files for `datetime.now` / `time.time`, and finished with a list of ten design choices for me to check. It took 7 turns and did not touch `tests/`.
+
+**What I checked or changed**
+
+- `git diff --stat -- tests/` was empty, so the tests were untouched.
+- I ran `pytest` and `ruff check .` myself: 21 passed, no lint problems.
+- I grepped `claims.py` and `db.py` for clock reads. There were none.
+- I made sure the rollback test really guards the transaction. I replaced `with conn:` in `file_claim` with `if True:` (same indentation, no transaction) and reran the test. It failed with `assert [Claim(id=1, ...)] == []`, because the half-written claim was still visible on the connection. I put the line back and it passed again.
+- I went through the design notes. I kept the trimming of passenger and flight and the `AUTOINCREMENT` ids. The CHECK lists in `db.py` repeat the tuples in `claims.py`. I left that as is so `db.py` does not import `claims.py`.
+- One gap, which the agent pointed out itself: `by` is never checked, so a blank "who" could be written to history. I did not let it add untested code here. I wrote a failing test for it on the next branch instead.

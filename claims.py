@@ -3,12 +3,14 @@
 No function here reads the clock. Anything that needs the current time takes `now`.
 """
 
+import csv
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 CLAIM_TYPES = ("delayed", "lost", "damaged")
 TIERS = ("standard", "silver", "gold")
 STATUSES = ("open", "assigned", "escalated", "resolved", "closed")
+ACTIVE_STATUSES = ("open", "assigned", "escalated")
 DEADLINE_HOURS = {"gold": 4, "silver": 24, "standard": 72}
 ALLOWED_CHANGES = {
     "open": {"assigned", "escalated"},
@@ -81,29 +83,84 @@ def is_overdue(deadline, now):
     return _as_utc(now) > _as_utc(deadline)
 
 
-def file_claim(conn, passenger, flight, claim_type, tier, note="", *, by, now):
-    """Save a new open claim and its first history entry. Returns the new claim id."""
+def _checked_claim(passenger, flight, claim_type, tier, note, *, now):
+    """Check one claim and return the values to store. Raises ClaimError, touches nothing."""
     passenger = _require_text(passenger, "passenger")
-    by = _require_text(by, "by")
     flight = _require_text(flight, "flight")
     _check_choice(claim_type, CLAIM_TYPES, "claim type")
     _check_choice(tier, TIERS, "tier")
     filed_at = _to_text(now)
     deadline = _to_text(deadline_for(tier, now))
+    return (passenger, flight, claim_type, tier, note or "", filed_at, deadline)
+
+
+def _insert_claim(conn, values, *, by):
+    """Insert one checked open claim and its first history entry, without committing."""
+    cursor = conn.execute(
+        "INSERT INTO claims (passenger, flight, claim_type, tier, status, note,"
+        " filed_at, deadline) VALUES (?, ?, ?, ?, 'open', ?, ?, ?)",
+        values,
+    )
+    claim_id = cursor.lastrowid
+    filed_at = values[5]
+    conn.execute(
+        "INSERT INTO history (claim_id, old_status, new_status, changed_by, changed_at)"
+        " VALUES (?, NULL, 'open', ?, ?)",
+        (claim_id, by, filed_at),
+    )
+    return claim_id
+
+
+def file_claim(conn, passenger, flight, claim_type, tier, note="", *, by, now):
+    """Save a new open claim and its first history entry. Returns the new claim id.
+
+    Everything is checked before the transaction opens, so a ClaimError leaves the
+    connection exactly as the caller had it.
+    """
+    by = _require_text(by, "by")
+    values = _checked_claim(passenger, flight, claim_type, tier, note, now=now)
+    with conn:
+        return _insert_claim(conn, values, by=by)
+
+
+SEED_COLUMNS = ("passenger", "flight", "type", "tier", "note")
+
+
+def seed_claims(conn, path, *, by, now):
+    """File every row of a CSV as an open claim, all in one transaction. Returns the count.
+
+    A bad row loads nothing. Row numbers are file line numbers, so the header is row 1.
+    Spaces around header names and values are ignored, except inside the note.
+    """
+    by = _require_text(by, "by")
+    checked = []
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as handle:
+            reader = csv.DictReader(handle)
+            reader.fieldnames = [name.strip() for name in reader.fieldnames or []]
+            missing = [name for name in SEED_COLUMNS if name not in reader.fieldnames]
+            if missing:
+                raise ClaimError(f"{path} is missing column(s): {', '.join(missing)}.")
+            for row in reader:
+                row_number = reader.line_num
+                if None in row:
+                    raise ClaimError(f"row {row_number}: more fields than the header has.")
+                if None in row.values():
+                    raise ClaimError(f"row {row_number}: fewer fields than the header has.")
+                try:
+                    checked.append(_checked_claim(
+                        row["passenger"].strip(), row["flight"].strip(), row["type"].strip(),
+                        row["tier"].strip(), row["note"], now=now,
+                    ))
+                except ClaimError as error:
+                    raise ClaimError(f"row {row_number}: {error}") from error
+    except (UnicodeDecodeError, csv.Error) as error:
+        raise ClaimError(f"cannot read {path}: {error}") from error
 
     with conn:
-        cursor = conn.execute(
-            "INSERT INTO claims (passenger, flight, claim_type, tier, status, note,"
-            " filed_at, deadline) VALUES (?, ?, ?, ?, 'open', ?, ?, ?)",
-            (passenger, flight, claim_type, tier, note or "", filed_at, deadline),
-        )
-        claim_id = cursor.lastrowid
-        conn.execute(
-            "INSERT INTO history (claim_id, old_status, new_status, changed_by, changed_at)"
-            " VALUES (?, NULL, 'open', ?, ?)",
-            (claim_id, by, filed_at),
-        )
-    return claim_id
+        for values in checked:
+            _insert_claim(conn, values, by=by)
+    return len(checked)
 
 
 def _claim_from_row(row):
@@ -237,3 +294,19 @@ def escalate_overdue(conn, *, by, now):
             )
             escalated.append(claim.id)
     return escalated
+
+
+# STRETCH GOAL 2
+def tier_report(conn, *, now):
+    """Per tier, in TIERS order: (tier, open count, overdue count).
+
+    Open counts claims whose status is open. Overdue counts claims in ACTIVE_STATUSES
+    whose deadline has passed at `now`.
+    """
+    counts = {tier: [0, 0] for tier in TIERS}
+    for claim in list_claims(conn):
+        if claim.status == "open":
+            counts[claim.tier][0] += 1
+        if claim.status in ACTIVE_STATUSES and is_overdue(claim.deadline, now):
+            counts[claim.tier][1] += 1
+    return [(tier, open_count, overdue) for tier, (open_count, overdue) in counts.items()]

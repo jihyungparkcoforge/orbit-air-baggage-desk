@@ -1,0 +1,12 @@
+.env
+.env.*
+.venv/
+.git/
+*.db
+*.sqlite
+*.sqlite3
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.claude/settings.local.json
+CLAUDE.local.md

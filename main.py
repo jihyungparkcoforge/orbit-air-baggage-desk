@@ -24,6 +24,14 @@ def _parse_now(text):
         return _naive_utc(datetime.fromisoformat(text))
     except ValueError as error:
         raise argparse.ArgumentTypeError(f"not an ISO 8601 timestamp: {text!r}") from error
+    except OverflowError as error:
+        raise argparse.ArgumentTypeError(f"cannot convert {text!r} to UTC") from error
+
+
+def _safe(text):
+    """Escape non-printable characters (terminal escape codes, bell, newlines) in claim data."""
+    return "".join(ch if ch.isprintable() else ch.encode("unicode_escape").decode("ascii")
+                   for ch in text)
 
 
 def _cmd_file(conn, args, now):
@@ -42,13 +50,14 @@ def _cmd_list(conn, args, now):
     print(f"{'ID':>4}  {'PASSENGER':<20}  {'FLIGHT':<7}  {'TYPE':<8}  {'TIER':<8}  "
           f"{'STATUS':<9}  {'AGENT':<16}  DEADLINE")
     for c in found:
-        print(f"{c.id:>4}  {c.passenger:<20}  {c.flight:<7}  {c.claim_type:<8}  {c.tier:<8}  "
-              f"{c.status:<9}  {c.agent or '-':<16}  {c.deadline.isoformat()}")
+        print(f"{c.id:>4}  {_safe(c.passenger):<20}  {_safe(c.flight):<7}  {c.claim_type:<8}  "
+              f"{c.tier:<8}  {c.status:<9}  {_safe(c.agent or '-'):<16}  "
+              f"{c.deadline.isoformat()}")
 
 
 def _cmd_assign(conn, args, now):
     claim = claims.assign_claim(conn, args.id, args.agent, by=args.by, now=now)
-    print(f"Assigned claim {claim.id} to {claim.agent}.")
+    print(f"Assigned claim {claim.id} to {_safe(claim.agent)}.")
 
 
 def _cmd_resolve(conn, args, now):
@@ -71,13 +80,13 @@ def _cmd_escalate(conn, args, now):
 
 def _cmd_history(conn, args, now):
     claim = claims.get_claim(conn, args.id)  # an unknown id is an error, not empty output
-    print(f"Claim {claim.id}: {claim.passenger}, {claim.flight}, {claim.claim_type}, "
-          f"{claim.tier}, {claim.status}")
+    print(f"Claim {claim.id}: {_safe(claim.passenger)}, {_safe(claim.flight)}, "
+          f"{claim.claim_type}, {claim.tier}, {claim.status}")
     if claim.note:
-        print(f"Note: {claim.note}")
+        print(f"Note: {_safe(claim.note)}")
     for entry in claims.get_history(conn, claim.id):
         print(f"{entry.changed_at.isoformat()}  {entry.old_status or '-'} -> "
-              f"{entry.new_status}  by {entry.changed_by}")
+              f"{entry.new_status}  by {_safe(entry.changed_by)}")
 
 
 def _cmd_seed(conn, args, now):
@@ -151,7 +160,7 @@ def main(argv=None):
         conn = db.connect(args.db)
         db.init_db(conn)
         args.handler(conn, args, now)
-    except (claims.ClaimError, sqlite3.Error, OSError) as error:
+    except (claims.ClaimError, sqlite3.Error, OSError, OverflowError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
     finally:

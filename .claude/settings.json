@@ -17,7 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/block_test_edits.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/block_test_edits.py\"",
+            "onFailure": "block"
           }
         ]
       }

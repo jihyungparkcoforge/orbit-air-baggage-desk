@@ -10,6 +10,13 @@ CLAIM_TYPES = ("delayed", "lost", "damaged")
 TIERS = ("standard", "silver", "gold")
 STATUSES = ("open", "assigned", "escalated", "resolved", "closed")
 DEADLINE_HOURS = {"gold": 4, "silver": 24, "standard": 72}
+ALLOWED_CHANGES = {
+    "open": {"assigned", "escalated"},
+    "assigned": {"resolved", "escalated"},
+    "escalated": {"assigned", "resolved"},
+    "resolved": {"closed"},
+    "closed": set(),
+}
 
 
 class ClaimError(ValueError):
@@ -67,6 +74,7 @@ def deadline_for(tier, filed_at):
 def file_claim(conn, passenger, flight, claim_type, tier, note="", *, by, now):
     """Save a new open claim and its first history entry. Returns the new claim id."""
     passenger = _require_text(passenger, "passenger")
+    by = _require_text(by, "by")
     flight = _require_text(flight, "flight")
     _check_choice(claim_type, CLAIM_TYPES, "claim type")
     _check_choice(tier, TIERS, "tier")
@@ -145,3 +153,45 @@ def get_history(conn, claim_id):
         )
         for row in rows
     ]
+
+
+def change_status(conn, claim_id, new_status, *, by, now, agent=None):
+    """Move a claim to a new status if ALLOWED_CHANGES permits it. Returns the updated claim.
+
+    Moving to assigned needs an agent name, which is stored on the claim.
+    """
+    _check_choice(new_status, STATUSES, "status")
+    by = _require_text(by, "by")
+    old_status = get_claim(conn, claim_id).status
+    if new_status not in ALLOWED_CHANGES[old_status]:
+        raise ClaimError(f"cannot change claim {claim_id} from {old_status} to {new_status}")
+    if new_status == "assigned":
+        agent = _require_text(agent, "agent")
+    changed_at = _to_text(now)
+
+    with conn:
+        if new_status == "assigned":
+            conn.execute(
+                "UPDATE claims SET status = ?, agent = ? WHERE id = ?",
+                (new_status, agent, claim_id),
+            )
+        else:
+            conn.execute("UPDATE claims SET status = ? WHERE id = ?", (new_status, claim_id))
+        conn.execute(
+            "INSERT INTO history (claim_id, old_status, new_status, changed_by, changed_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (claim_id, old_status, new_status, by, changed_at),
+        )
+    return get_claim(conn, claim_id)
+
+
+def assign_claim(conn, claim_id, agent, *, by, now):
+    return change_status(conn, claim_id, "assigned", by=by, now=now, agent=agent)
+
+
+def resolve_claim(conn, claim_id, *, by, now):
+    return change_status(conn, claim_id, "resolved", by=by, now=now)
+
+
+def close_claim(conn, claim_id, *, by, now):
+    return change_status(conn, claim_id, "closed", by=by, now=now)

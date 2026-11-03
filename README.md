@@ -90,3 +90,38 @@ Check before you finish: run `.venv/bin/python -m pytest -v` and `.venv/bin/ruff
 - I made sure the rollback test really guards the transaction. I replaced `with conn:` in `file_claim` with `if True:` (same indentation, no transaction) and reran the test. It failed with `assert [Claim(id=1, ...)] == []`, because the half-written claim was still visible on the connection. I put the line back and it passed again.
 - I went through the design notes. I kept the trimming of passenger and flight and the `AUTOINCREMENT` ids. The CHECK lists in `db.py` repeat the tuples in `claims.py`. I left that as is so `db.py` does not import `claims.py`.
 - One gap, which the agent pointed out itself: `by` is never checked, so a blank "who" could be written to history. I did not let it add untested code here. I wrote a failing test for it on the next branch instead.
+
+### feature/assign-and-status (JIH-23)
+
+**Prompt I gave**
+
+```
+Linear issue JIH-23, branch feature/assign-and-status (already checked out).
+
+Goal: extend claims.py so every test passes, including the new tests/test_status.py. Read tests/test_status.py and tests/conftest.py first, then the "Status changes" section of PLAN.md and the "Changes after the plan was written" section at the bottom.
+
+What to build in claims.py:
+- ALLOWED_CHANGES: a dict from each status to the set of statuses it may move to, matching the table in PLAN.md.
+- change_status(conn, claim_id, new_status, *, by, now, agent=None) -> Claim. Look the move up in ALLOWED_CHANGES. A move that is not in the table raises ClaimError with a message in the form "cannot change claim <id> from <old> to <new>" and saves nothing. An unknown status name and a missing claim id are ClaimError too. Moving to assigned needs a non-blank agent, which is stored on the claim.
+- assign_claim, resolve_claim, close_claim as thin wrappers over change_status that return the updated Claim.
+- `by` must not be blank, for file_claim and for every change.
+- Each change updates the claim row first and then inserts the history row (old status, new status, by, now), both inside one `with conn:` block.
+
+Constraints:
+- Do not edit anything in tests/. If a test looks wrong, stop and tell me why instead.
+- Keep the allowed moves in the one dictionary, not an if/elif chain.
+- No clock reads in claims.py. Do not touch db.py unless a test needs it. Do not create main.py. Do not commit.
+
+Check before you finish: run `.venv/bin/python -m pytest -q` and `.venv/bin/ruff check .`, show me the last lines of both, and list anything I should look at in review.
+```
+
+**What the agent did.** It read the new test file, the conftest, the current `claims.py` and `db.py`, and PLAN.md. Then it added `ALLOWED_CHANGES`, `change_status`, and the three wrappers, and made `file_claim` reject a blank `by`. On a second pass it moved the agent-name check out of the `with conn:` block so that every check runs before any write. It ran pytest (57 passed) and ruff (clean) and changed only `claims.py`. It took 5 turns. It also listed four things for review, and one of them was a real weakness (see below).
+
+**What I checked or changed**
+
+- `git diff --stat -- tests/` was empty. I read the whole `claims.py` diff. It adds 50 lines and touches nothing outside the new functions apart from one line in `file_claim`.
+- I reran pytest (57 passed) and ruff (clean), and grepped for clock reads (none).
+- I repeated the rollback check, this time on `change_status` only. I swapped its `with conn:` for `if True:`. `test_failed_history_write_keeps_the_old_status_and_agent` then failed with `assert 'assigned' == 'open'`. I restored the line and all 57 passed again.
+- I called the functions by hand to read the error messages a desk user would see: `cannot change claim 1 from open to closed`, `Unknown status 'archived'. Allowed: open, assigned, escalated, resolved, closed.`, `agent must not be blank.`, `No claim with id 9.`, `by must not be blank.`
+- The agent pointed out that `change_status` reads the current status before the transaction opens. Two people running commands on the same database file at the same moment could both pass the table check, and the second history row would then show a stale old status. The fix would be `UPDATE ... WHERE id = ? AND status = ?` plus a `rowcount` check. This is a single-user CLI, so I am leaving it as a known limitation rather than adding code with no test behind it.
+- The agent also noted that escalation does not check the deadline yet. That is expected. The next branch adds the overdue guard and a test that fails until it exists.

@@ -47,11 +47,16 @@ class HistoryEntry:
     changed_at: datetime
 
 
-def _to_text(moment):
-    """Store times as ISO 8601 with no offset, in UTC."""
+def _as_utc(moment):
+    """Drop any offset after converting to UTC, matching how times are stored."""
     if moment.tzinfo is not None:
         moment = moment.astimezone(UTC).replace(tzinfo=None)
-    return moment.isoformat()
+    return moment
+
+
+def _to_text(moment):
+    """Store times as ISO 8601 with no offset, in UTC."""
+    return _as_utc(moment).isoformat()
 
 
 def _check_choice(value, allowed, name):
@@ -69,6 +74,11 @@ def deadline_for(tier, filed_at):
     """Filed time plus the response hours for the tier."""
     _check_choice(tier, TIERS, "tier")
     return filed_at + timedelta(hours=DEADLINE_HOURS[tier])
+
+
+def is_overdue(deadline, now):
+    """Strict: exactly at the deadline is not overdue, only after it."""
+    return _as_utc(now) > _as_utc(deadline)
 
 
 def file_claim(conn, passenger, flight, claim_type, tier, note="", *, by, now):
@@ -159,12 +169,16 @@ def change_status(conn, claim_id, new_status, *, by, now, agent=None):
     """Move a claim to a new status if ALLOWED_CHANGES permits it. Returns the updated claim.
 
     Moving to assigned needs an agent name, which is stored on the claim.
+    Moving to escalated is only allowed once the claim is overdue at `now`.
     """
     _check_choice(new_status, STATUSES, "status")
     by = _require_text(by, "by")
-    old_status = get_claim(conn, claim_id).status
+    claim = get_claim(conn, claim_id)
+    old_status = claim.status
     if new_status not in ALLOWED_CHANGES[old_status]:
         raise ClaimError(f"cannot change claim {claim_id} from {old_status} to {new_status}")
+    if new_status == "escalated" and not is_overdue(claim.deadline, now):
+        raise ClaimError(f"cannot escalate claim {claim_id}: it is not overdue")
     if new_status == "assigned":
         agent = _require_text(agent, "agent")
     changed_at = _to_text(now)
@@ -195,3 +209,31 @@ def resolve_claim(conn, claim_id, *, by, now):
 
 def close_claim(conn, claim_id, *, by, now):
     return change_status(conn, claim_id, "closed", by=by, now=now)
+
+
+def escalate_overdue(conn, *, by, now):
+    """Escalate every escalatable claim that is overdue at `now`. Returns their ids, ascending.
+
+    All updates and history rows share one transaction, so a failure leaves every claim as it was.
+    """
+    by = _require_text(by, "by")
+    escalatable = [status for status in STATUSES if "escalated" in ALLOWED_CHANGES[status]]
+    placeholders = ", ".join("?" for _ in escalatable)
+    changed_at = _to_text(now)
+    escalated = []
+
+    with conn:
+        rows = conn.execute(
+            f"SELECT * FROM claims WHERE status IN ({placeholders}) ORDER BY id", escalatable
+        ).fetchall()
+        for claim in map(_claim_from_row, rows):
+            if not is_overdue(claim.deadline, now):
+                continue
+            conn.execute("UPDATE claims SET status = 'escalated' WHERE id = ?", (claim.id,))
+            conn.execute(
+                "INSERT INTO history (claim_id, old_status, new_status, changed_by, changed_at)"
+                " VALUES (?, ?, 'escalated', ?, ?)",
+                (claim.id, claim.status, by, changed_at),
+            )
+            escalated.append(claim.id)
+    return escalated

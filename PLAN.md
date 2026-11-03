@@ -14,7 +14,7 @@ I am building a small command line tool backed by SQLite that the baggage desk c
 - keep a full audit trail of who changed what and when,
 - sweep up claims that are past their deadline and escalate them.
 
-## Deadline rules (my words)
+## Deadline rules
 
 The deadline is fixed when the claim is filed: filed time plus a number of hours that depends on the passenger's tier.
 
@@ -30,7 +30,7 @@ No rule code is allowed to look at the clock. Every function that cares about ti
 
 Times are stored as ISO 8601 text with no offset, treated as UTC.
 
-## Status changes (my words)
+## Status changes
 
 Every claim starts as `open`. From there:
 

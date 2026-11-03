@@ -125,3 +125,38 @@ Check before you finish: run `.venv/bin/python -m pytest -q` and `.venv/bin/ruff
 - I called the functions by hand to read the error messages a desk user would see: `cannot change claim 1 from open to closed`, `Unknown status 'archived'. Allowed: open, assigned, escalated, resolved, closed.`, `agent must not be blank.`, `No claim with id 9.`, `by must not be blank.`
 - The agent pointed out that `change_status` reads the current status before the transaction opens. Two people running commands on the same database file at the same moment could both pass the table check, and the second history row would then show a stale old status. The fix would be `UPDATE ... WHERE id = ? AND status = ?` plus a `rowcount` check. This is a single-user CLI, so I am leaving it as a known limitation rather than adding code with no test behind it.
 - The agent also noted that escalation does not check the deadline yet. That is expected. The next branch adds the overdue guard and a test that fails until it exists.
+
+### feature/deadlines-and-escalation (JIH-24)
+
+**Prompt I gave**
+
+```
+Linear issue JIH-24, branch feature/deadlines-and-escalation (already checked out).
+
+Goal: extend claims.py so every test passes, including the new tests/test_escalation.py. Read that file and tests/conftest.py first, then the "Deadline rules" and "Status changes" sections of PLAN.md.
+
+What to build in claims.py:
+- is_overdue(deadline, now) -> bool. True only when now is strictly later than the deadline. Exactly at the deadline is not overdue.
+- change_status(..., "escalated", ...) raises ClaimError (message mentions "overdue") when the claim is not overdue at `now`. The ALLOWED_CHANGES table already limits escalation to open and assigned claims.
+- escalate_overdue(conn, *, by, now) -> list[int]. Escalates every open or assigned claim that is overdue at `now`, writes one history row per claim (old status, escalated, by, now), and returns the escalated ids in ascending order. Resolved, closed, already escalated, and not yet overdue claims are left alone. Nothing overdue means an empty list.
+- The whole sweep runs in one `with conn:` block, and each claim is updated before its history row is inserted. If any history insert fails, let the sqlite3 error propagate and leave every claim as it was.
+
+Constraints:
+- Do not edit anything in tests/. If a test looks wrong, stop and tell me why instead.
+- `now` is a parameter everywhere. No datetime.now() or other clock reads in claims.py.
+- Reuse ALLOWED_CHANGES and the existing helpers instead of duplicating the rules.
+- Do not create main.py. Do not commit.
+
+Check before you finish: run `.venv/bin/python -m pytest -q` and `.venv/bin/ruff check .`, show me the last lines of both, and list anything I should look at in review.
+```
+
+**What the agent did.** It ran the suite first and saw 15 failures, all in the new file. Then it added `is_overdue`, the overdue guard in `change_status`, and `escalate_overdue`. It also pulled the UTC conversion out of `_to_text` into a small `_as_utc` helper so `is_overdue` could reuse it. The sweep works out which statuses can be escalated from `ALLOWED_CHANGES` instead of hardcoding "open" and "assigned". It ran pytest (72 passed) and ruff (clean). It took 4 turns and changed only `claims.py`.
+
+**What I checked or changed**
+
+- `git diff --stat -- tests/` was empty. I reran pytest (72 passed) and ruff (clean), and grepped for clock reads (none).
+- Two mutation checks, both put back afterwards:
+  - With `with conn:` removed from `escalate_overdue`, `test_failed_history_write_rolls_back_the_whole_sweep` failed (`assert 'escalated' == 'open'`).
+  - With `>` changed to `>=` in `is_overdue`, 7 tests failed: the exact-deadline test, the edge test for all three tiers, the sweep-at-the-deadline test, and both not-overdue escalation tests. That is the off-by-one risk from PLAN.md, and the tests catch it.
+- The tests only use times with no offset, so I checked one case by hand. For a deadline of 13:00 UTC, `now` at `21:59+09:00`, `22:00+09:00`, and `22:01+09:00` gave not overdue, not overdue, and overdue. That is right, because the agent converts both sides to UTC before comparing.
+- I read the agent's four review notes. Two of them describe behavior I already accepted in PLAN.md: a reassigned claim gets escalated again by the next sweep, and the read before the write is not locked, which only matters if two writers run at once. The sweep filters overdue claims in Python rather than SQL. I kept it that way so the strict `>` rule lives in exactly one place.

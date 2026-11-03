@@ -157,3 +157,4 @@ That is well over 20 tests in total.
 
 - Branch 2: I wrote "all 8 pairs" for the allowed changes. The table has 7 (open 2, assigned 2, escalated 2, resolved 1, closed 0). The tests cover all 7, plus 16 disallowed pairs.
 - Branch 2: added a rule that `by` (who made the change) cannot be blank, for filing and for every status change. Without it a history row could be saved with no "who".
+- Branch 4: added a `report` command (stretch goal 2). After `/code-review` on the last pull request I added a fifth test file, `tests/test_review_fixes.py`, so the fixes stayed test-first without editing a test file that was already committed.

@@ -24,6 +24,19 @@ python -m pytest tests/test_claims.py     # one file
 ruff check .
 ```
 
+## Linear Issues
+
+Project: [Orbit Air Baggage Desk](https://linear.app/jihyung-park/project/orbit-air-baggage-desk-34c7cc27407e)
+
+One issue per branch. Each has a problem, actual behavior, expected behavior, done when, and a constraint, and each title starts with its branch name.
+
+| Branch | Issue |
+|---|---|
+| feature/schema-and-filing | [JIH-22](https://linear.app/jihyung-park/issue/JIH-22/featureschema-and-filing-claims-and-history-tables-filing-with) |
+| feature/assign-and-status | [JIH-23](https://linear.app/jihyung-park/issue/JIH-23/featureassign-and-status-assign-resolve-close-allowed-status-changes) |
+| feature/deadlines-and-escalation | [JIH-24](https://linear.app/jihyung-park/issue/JIH-24/featuredeadlines-and-escalation-strict-overdue-rule-escalation-sweep) |
+| feature/cli | [JIH-25](https://linear.app/jihyung-park/issue/JIH-25/featurecli-all-eight-commands-the-now-option-and-the-seed-command) |
+
 ## Setup Check
 
 I checked the `.env` deny rule in a new Claude Code session started from the project folder (`claude -p`), after `.claude/settings.json` was committed. Settings are read when a session starts, so an already open session would not have been a fair test.

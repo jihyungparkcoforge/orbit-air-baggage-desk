@@ -3,6 +3,7 @@
 No function here reads the clock. Anything that needs the current time takes `now`.
 """
 
+import csv
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -81,8 +82,8 @@ def is_overdue(deadline, now):
     return _as_utc(now) > _as_utc(deadline)
 
 
-def file_claim(conn, passenger, flight, claim_type, tier, note="", *, by, now):
-    """Save a new open claim and its first history entry. Returns the new claim id."""
+def _insert_claim(conn, passenger, flight, claim_type, tier, note, *, by, now):
+    """Check and insert one open claim and its first history entry, without committing."""
     passenger = _require_text(passenger, "passenger")
     by = _require_text(by, "by")
     flight = _require_text(flight, "flight")
@@ -91,19 +92,56 @@ def file_claim(conn, passenger, flight, claim_type, tier, note="", *, by, now):
     filed_at = _to_text(now)
     deadline = _to_text(deadline_for(tier, now))
 
-    with conn:
-        cursor = conn.execute(
-            "INSERT INTO claims (passenger, flight, claim_type, tier, status, note,"
-            " filed_at, deadline) VALUES (?, ?, ?, ?, 'open', ?, ?, ?)",
-            (passenger, flight, claim_type, tier, note or "", filed_at, deadline),
-        )
-        claim_id = cursor.lastrowid
-        conn.execute(
-            "INSERT INTO history (claim_id, old_status, new_status, changed_by, changed_at)"
-            " VALUES (?, NULL, 'open', ?, ?)",
-            (claim_id, by, filed_at),
-        )
+    cursor = conn.execute(
+        "INSERT INTO claims (passenger, flight, claim_type, tier, status, note,"
+        " filed_at, deadline) VALUES (?, ?, ?, ?, 'open', ?, ?, ?)",
+        (passenger, flight, claim_type, tier, note or "", filed_at, deadline),
+    )
+    claim_id = cursor.lastrowid
+    conn.execute(
+        "INSERT INTO history (claim_id, old_status, new_status, changed_by, changed_at)"
+        " VALUES (?, NULL, 'open', ?, ?)",
+        (claim_id, by, filed_at),
+    )
     return claim_id
+
+
+def file_claim(conn, passenger, flight, claim_type, tier, note="", *, by, now):
+    """Save a new open claim and its first history entry. Returns the new claim id."""
+    with conn:
+        return _insert_claim(conn, passenger, flight, claim_type, tier, note, by=by, now=now)
+
+
+SEED_COLUMNS = ("passenger", "flight", "type", "tier", "note")
+
+
+def seed_claims(conn, path, *, by, now):
+    """File every row of a CSV as an open claim, all in one transaction. Returns the count.
+
+    A bad row loads nothing. Row numbers count the header as row 1.
+    """
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as handle:
+            reader = csv.DictReader(handle)
+            missing = [name for name in SEED_COLUMNS if name not in (reader.fieldnames or [])]
+            if missing:
+                raise ClaimError(f"{path} is missing column(s): {', '.join(missing)}.")
+            rows = list(reader)
+    except (UnicodeDecodeError, csv.Error) as error:
+        raise ClaimError(f"cannot read {path}: {error}") from error
+
+    with conn:
+        for row_number, row in enumerate(rows, start=2):
+            if None in row:
+                raise ClaimError(f"row {row_number}: more fields than the header has.")
+            try:
+                _insert_claim(
+                    conn, row["passenger"], row["flight"], row["type"], row["tier"],
+                    row["note"], by=by, now=now,
+                )
+            except ClaimError as error:
+                raise ClaimError(f"row {row_number}: {error}") from error
+    return len(rows)
 
 
 def _claim_from_row(row):
@@ -237,3 +275,19 @@ def escalate_overdue(conn, *, by, now):
             )
             escalated.append(claim.id)
     return escalated
+
+
+# STRETCH GOAL 2
+def tier_report(conn, *, now):
+    """Per tier, in TIERS order: (tier, open count, overdue count).
+
+    Open counts claims whose status is open. Overdue counts claims not yet resolved or
+    closed whose deadline has passed at `now`.
+    """
+    counts = {tier: [0, 0] for tier in TIERS}
+    for claim in list_claims(conn):
+        if claim.status == "open":
+            counts[claim.tier][0] += 1
+        if claim.status not in ("resolved", "closed") and is_overdue(claim.deadline, now):
+            counts[claim.tier][1] += 1
+    return [(tier, open_count, overdue) for tier, (open_count, overdue) in counts.items()]

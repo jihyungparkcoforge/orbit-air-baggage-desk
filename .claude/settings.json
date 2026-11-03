@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Bash(cat .env*)",
+      "Bash(head .env*)",
+      "Bash(tail .env*)",
+      "Bash(less .env*)",
+      "Bash(more .env*)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" || exit 0; out=$(.venv/bin/python -m pytest -q 2>&1); code=$?; if [ $code -eq 0 ] || [ $code -eq 5 ]; then exit 0; fi; printf '%s\\n' \"$out\" | tail -n 40 >&2; echo \"pytest failed (exit $code). Fix the code until every test passes. Do not edit files in tests/.\" >&2; exit 2",
+            "timeout": 120,
+            "statusMessage": "Running pytest before stopping"
+          }
+        ]
+      }
+    ]
+  }
+}

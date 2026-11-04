@@ -124,6 +124,22 @@ I also tested the Stop hook command by hand before relying on it: with no tests 
 
 ## Agent Log
 
+### How this lab was run (orchestrator and sub-agents)
+
+I gave one Claude Code session the full lab instructions and had it act as an orchestrator. That main session:
+
+- wrote PLAN.md, CLAUDE.md, `.claude/settings.json`, and the four Linear issues,
+- wrote the failing tests for each branch and confirmed they failed,
+- started a separate Claude Code sub-agent session (`claude -p` in the project folder) for each branch, with a prompt based on the Linear issue. The sub-agents wrote the feature code.
+- reviewed each sub-agent's diff, reran pytest and ruff, ran the mutation checks, made the corrections described below, and opened and merged the pull requests,
+- wrote this README, including the entries below.
+
+My part was the initial instruction, a few setup decisions (Git identity, which Linear team to use, the Linear API key), and reviewing the result afterwards. In the entries below, "I" means the orchestrator session, and "the agent" means the sub-agent for that branch.
+
+**Approval.** I asked Adam Ingram whether this orchestrator and sub-agent approach was acceptable for the lab. He said it was fine, with these conditions: follow good practices, review as you build, keep the build in small blocks so you can test often and review everything, and run Claude Code in manual mode.
+
+### The loop for each branch
+
 Every branch followed the same loop. I wrote the tests, committed them, and watched them fail. Then I gave a new Claude Code session (`claude -p` in the project folder, so it loaded CLAUDE.md, the deny rule, and the Stop hook) a prompt built from the branch's Linear issue. After that I reviewed the diff, reran pytest and ruff myself, and committed the feature code. The agent was told not to commit, and it never did.
 
 ### feature/schema-and-filing (JIH-22)
